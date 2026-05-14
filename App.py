@@ -14,9 +14,10 @@ def setup_model():
         api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
         
-        # 404 에러 방지를 위해 가장 범용적인 모델 명칭 사용
-        # 최신 라이브러리 환경에서는 gemini-1.5-flash가 권장됩니다.
-        return genai.GenerativeModel('gemini-1.5-flash')
+        # 404 에러를 피하기 위해 가장 범용적이고 안정적인 'gemini-pro' 모델을 우선 사용합니다.
+        # 만약 1.5 flash를 꼭 쓰고 싶다면 'models/gemini-1.5-flash'라고 전체 경로를 적기도 합니다.
+        return genai.GenerativeModel('gemini-pro')
+        
     except Exception as e:
         st.error(f"모델 설정 중 오류 발생: {e}")
         st.stop()
@@ -24,9 +25,8 @@ def setup_model():
 model = setup_model()
 
 # 2. UI 설정
-st.set_page_config(page_title="맥락 분석 도구", layout="wide")
+st.set_page_config(page_title="맥락 데이터 분석기", layout="wide")
 st.title("🔍 맥락적 관련 검색어 분석기")
-st.write("인물의 특징을 분석하여 국내외 유사 사례와 기네스급 정보를 연결합니다.")
 
 with st.sidebar:
     st.header("설정")
@@ -35,75 +35,60 @@ with st.sidebar:
 
 # 3. 분석 함수
 def analyze_context(keyword):
-    # AI가 JSON 형식만 깔끔하게 내보내도록 유도하는 프롬프트
+    # AI가 JSON 형식만 깔끔하게 내보내도록 유도
     prompt = f"""
-    입력된 키워드 '{keyword}'를 분석하여 반드시 아래 JSON 형식으로만 응답하세요.
+    Analyze the keyword '{keyword}' and provide related information in JSON format ONLY.
     
     {{
-        "attributes": ["핵심특징1", "핵심특징2"],
-        "domestic": {{"유사인물1": "이유", "유사인물2": "이유"}},
-        "international": {{"유사인물1": "이유", "유사인물2": "이유"}},
-        "concepts": ["관련개념1", "관련개념2"]
+        "attributes": ["key_feature1", "key_feature2"],
+        "domestic": {{"Korean_person_name": "reason"}},
+        "international": {{"International_person_name": "reason"}},
+        "concepts": ["related_concept1", "related_concept2"]
     }}
     
-    다른 설명은 절대 생략하고 JSON 데이터만 출력하세요.
+    Ensure the reasons are in Korean. Do not include any other text.
     """
     
     try:
         response = model.generate_content(prompt)
         content = response.text
         
-        # 정규표현식으로 JSON 블록만 추출 (구문 오류 방지)
+        # 정규표현식으로 JSON 블록 { ... } 만 추출하여 구문 오류 방지
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
         else:
-            # JSON 형식이 아닐 경우 재시도 로직이나 에러 처리
-            st.error("AI가 올바른 JSON 형식을 생성하지 못했습니다.")
+            st.error("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
             return None
     except Exception as e:
-        st.error(f"분석 중 오류 발생: {e}")
+        st.error(f"분석 중 오류 발생 (404 등): {e}")
+        st.info("Tip: API 키가 해당 모델을 지원하는지 확인하거나, 모델명을 'gemini-pro'로 변경해 보세요.")
         return None
 
 # 4. 결과 화면
 if analyze_button and target_keyword:
-    with st.spinner(f"'{target_keyword}'의 맥락 데이터를 수집 중..."):
+    with st.spinner(f"'{target_keyword}'의 맥락 데이터를 분석 중..."):
         data = analyze_context(target_keyword)
         
         if data:
-            # 1. 핵심 특징 (태그 형태)
             st.subheader(f"📌 {target_keyword}의 주요 속성")
-            attrs = data.get('attributes', [])
-            if attrs:
-                cols = st.columns(len(attrs))
-                for i, val in enumerate(attrs):
-                    cols[i].success(f"**{val}**")
+            st.write(", ".join(data.get('attributes', [])))
             
             st.divider()
-            
-            # 2. 국내외 유사 사례 비교
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("🇰🇷 국내 유사 맥락 인물")
+                st.subheader("🇰🇷 국내 유사 사례")
                 for name, reason in data.get('domestic', {}).items():
                     with st.expander(f"**{name}**"):
                         st.write(reason)
             
             with col2:
-                st.subheader("🌎 해외 유사 사례 & 기네스")
+                st.subheader("🌎 해외 유사 사례")
                 for name, reason in data.get('international', {}).items():
                     with st.expander(f"**{name}**"):
                         st.write(reason)
             
             st.divider()
-            
-            # 3. 데이터 요약 테이블
-            st.subheader("📊 데이터 분석 요약")
-            all_cases = {**data.get('domestic', {}), **data.get('international', {})}
-            df_rows = [{"인물/대상": k, "연관 사유": v} for k, v in all_cases.items()]
-            if df_rows:
-                st.table(pd.DataFrame(df_rows))
-                
-            # 4. 하단 관련 개념
-            st.caption(f"관련 개념: {', '.join(data.get('concepts', []))}")
+            st.subheader("💡 관련 개념")
+            st.info(", ".join(data.get('concepts', [])))
