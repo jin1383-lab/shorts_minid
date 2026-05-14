@@ -14,13 +14,17 @@ def setup_model():
         api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
         
-        # 404 에러를 피하기 위해 가장 범용적이고 안정적인 'gemini-pro' 모델을 우선 사용합니다.
-        # 만약 1.5 flash를 꼭 쓰고 싶다면 'models/gemini-1.5-flash'라고 전체 경로를 적기도 합니다.
-        return genai.GenerativeModel('gemini-pro')
+        # 404 에러를 방지하기 위해 'models/' 경로를 명시합니다.
+        # 가장 안정적인 gemini-1.5-flash 또는 gemini-pro를 시도합니다.
+        return genai.GenerativeModel('models/gemini-1.5-flash')
         
     except Exception as e:
-        st.error(f"모델 설정 중 오류 발생: {e}")
-        st.stop()
+        # 만약 1.5-flash도 안된다면 gemini-pro로 마지막 시도
+        try:
+            return genai.GenerativeModel('models/gemini-pro')
+        except:
+            st.error(f"모델 로드 실패: {e}")
+            st.stop()
 
 model = setup_model()
 
@@ -35,44 +39,50 @@ with st.sidebar:
 
 # 3. 분석 함수
 def analyze_context(keyword):
-    # AI가 JSON 형식만 깔끔하게 내보내도록 유도
     prompt = f"""
     Analyze the keyword '{keyword}' and provide related information in JSON format ONLY.
-    
     {{
         "attributes": ["key_feature1", "key_feature2"],
         "domestic": {{"Korean_person_name": "reason"}},
         "international": {{"International_person_name": "reason"}},
         "concepts": ["related_concept1", "related_concept2"]
     }}
-    
-    Ensure the reasons are in Korean. Do not include any other text.
+    Ensure all reasons and descriptions are in Korean.
     """
     
     try:
+        # 안전한 호출을 위해 명시적으로 generate_content 사용
         response = model.generate_content(prompt)
+        
+        # API 응답 확인
+        if not response.text:
+            st.error("AI로부터 응답을 받지 못했습니다.")
+            return None
+            
         content = response.text
         
-        # 정규표현식으로 JSON 블록 { ... } 만 추출하여 구문 오류 방지
+        # JSON 블록 추출
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
         else:
-            st.error("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
+            # JSON 형식이 아닐 경우 텍스트라도 표시하기 위해 예외 처리
+            st.warning("데이터 형식 변환에 실패했습니다. 응답 원문을 확인하세요.")
+            st.write(content)
             return None
+            
     except Exception as e:
-        st.error(f"분석 중 오류 발생 (404 등): {e}")
-        st.info("Tip: API 키가 해당 모델을 지원하는지 확인하거나, 모델명을 'gemini-pro'로 변경해 보세요.")
+        st.error(f"분석 실행 중 오류 발생: {e}")
         return None
 
 # 4. 결과 화면
 if analyze_button and target_keyword:
-    with st.spinner(f"'{target_keyword}'의 맥락 데이터를 분석 중..."):
+    with st.spinner(f"'{target_keyword}'의 맥락을 분석 중입니다..."):
         data = analyze_context(target_keyword)
         
         if data:
             st.subheader(f"📌 {target_keyword}의 주요 속성")
-            st.write(", ".join(data.get('attributes', [])))
+            st.info(", ".join(data.get('attributes', [])))
             
             st.divider()
             col1, col2 = st.columns(2)
@@ -91,4 +101,4 @@ if analyze_button and target_keyword:
             
             st.divider()
             st.subheader("💡 관련 개념")
-            st.info(", ".join(data.get('concepts', [])))
+            st.write(", ".join(data.get('concepts', [])))
